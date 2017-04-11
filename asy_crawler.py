@@ -1,46 +1,43 @@
-import socket 
-import asyncio
-
+import socket
+from selectors import *
+selector = DefaultSelector()
+urls = ['www.baidu.com' for x in range(20)]
 class Crawler(object):
 	def __init__(self):
-		self.content = []
-		self.text = b''
-		self.sock = socket.socket()
-	async def get_connect(self):
-		self.sock.setblocking(False)
-		try:
-			self.sock.connect(('www.baidu.com', 80))
-		except:
-			pass
-		await my_send(self)
-		self.text = await fetch(self)
+		self.sock_list = []
+		self.resp = []
+		self.count = 0
 
-	async def my_send(self):
-		try:
-			ret = self.sock.send('GET / HTTP/1.1\r\nHost: www.baidu.com\r\n\r\n'.encode('ascii'))
-			yield ret
-		except Exception as e:
-			raise e
+	def get_connected(self,key, mask):
+		selector.unregister(key.fileobj)
+		get = 'GET / HTTP/1.1\r\nHost: www.baidu.com\r\n\r\n'.encode('ascii')
+		key.fileobj.send(get)
+		selector.register(key.fileobj, EVENT_READ, self.read_resp)
 
-	async def fetch(self):
-		
-		chunk = yield get_content(self)
-		while chunk:
-			self.content.append(chunk)
-			chunk = yield get_content(self)
-		yield b''.join(self.content)
+	def crawl(self):
+		self.sock_list = [socket.socket() for x in range(len(urls))]
+		self.count = len(urls)
+		for sock,url in zip(self.sock_list,urls):
+			addr = (url, 80)
+			sock.setblocking(False)
+			try:
+				sock.connect(addr)
+			except BlockingIOError:
+				pass
+			selector.register(sock, EVENT_WRITE, self.get_connected)
 
-	def get_content(self):
-		try:
-			chunk = self.sock.recv(4096)
-			yield chunk
-		except:
-			pass
+	def read_resp(self, key, mask):
+		chunk = key.fileobj.recv(4096)
+		if chunk:
+			self.resp.append(chunk)
+		else:
+			self.count -= 1
+			selector.unregister(key.fileobj)
 
-crawler_list = [Crawler() for x in range(10)]
-task = []
-for t in crawler_list:
-	task.append(t.get_connect())
-loop = asyncio.get_event_loop()
-loop.run_until_complete(asyncio.wait(crawler_list))
-loop.close()
+c = Crawler()
+c.crawl()
+while c.count:
+	events = selector.select()
+	for event_key, event_mask in events:
+		callback = event_key.data
+		callback(event_key, event_mask)
