@@ -42,8 +42,10 @@ class Crawler(object):
 		chunk = yield from self.recv_data()
 		self.resp += chunk
 		print(self.resp)
-		global stop
-		stop = True
+		global stop, count
+		count -= 1
+		if count <= 0:
+			stop = True
 
 	def send_data(self):
 		get = 'GET / HTTP/1.1\r\nHost: www.baidu.com\r\n\r\n'.encode('ascii')
@@ -75,11 +77,12 @@ class Task(object):
 
 stop = False
 selector = DefaultSelector()
-c = Crawler()
-task = Task(c.fetch())
+count = 10
+
+for i in range(10):
+	task = Task(Crawler().fetch())
 while not stop:
 	events = selector.select()
 	for event_key , event_mask in events:
 		call = event_key.data
 		call()
-
