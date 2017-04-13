@@ -34,7 +34,7 @@ class Crawler(object):
 			f.set_result(None)
 
 		selector.register(self.sock, EVENT_WRITE, connected)
-		yield f
+		yield from f
 		print('connected.')
 		
 		self.send_data()
