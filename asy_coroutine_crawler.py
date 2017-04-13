@@ -39,8 +39,8 @@ class Crawler(object):
 		
 		self.send_data()
 		selector.unregister(self.sock)
-		chunk = yield from self.recv_data()
-		self.resp += chunk
+		data = yield from self.recv_data()
+		self.resp = data
 		print(self.resp)
 		global stop, count
 		count -= 1
@@ -55,7 +55,13 @@ class Crawler(object):
 		f = Future()
 		
 		def read_ready():
-			f.set_result(self.sock.recv(4096))
+			data = b''
+			while True:
+				try:
+					data += self.sock.recv(4096)
+				except:
+					break
+			f.set_result(data)
 		selector.register(self.sock, EVENT_READ, read_ready)
 		chunk = yield from f
 		selector.unregister(self.sock)
@@ -80,7 +86,7 @@ selector = DefaultSelector()
 count = 10
 
 for i in range(10):
-	task = Task(Crawler().fetch())
+	Task(Crawler().fetch())
 while not stop:
 	events = selector.select()
 	for event_key , event_mask in events:
