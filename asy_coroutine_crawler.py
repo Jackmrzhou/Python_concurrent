@@ -1,94 +1,105 @@
 import socket
 from selectors import *
 class Future(object):
-	def __init__(self):
-		self.result = None
-		self._callback = []
+    def __init__(self):
+        self._callback = None
+        self.result = None
 
-	def add_callback(self, func):
-		self._callback.append(func)
+    def _call(self):
+        self._callback(self)
 
-	def set_result(self, result):
-		self.result = result
-		for func in self._callback:
-			func(self)
-	def __iter__(self):
-		yield self
-		return self.result
+    def set_callback(self, future):
+        self._callback = future
+
+    def __iter__(self):
+        yield self
+        return self.result
+
+def connect(sock, addr):
+    f = Future()
+    try:
+        sock.connect(addr)
+    except BlockingIOError:
+        pass
+    def connected():
+        f._call()
+    selector.register(sock, EVENT_WRITE, connected)
+    yield from f
+    selector.unregister(sock)
+
+def send(sock,get):
+    sock.send(get)
+
+def recv_data_all(sock, Buffer):
+    data = b''
+    chunk = yield from read(sock, Buffer)
+    while chunk:
+        data += chunk
+        chunk = yield from read(sock, Buffer)
+    return data
+
+def read(sock, Buffer):
+    f = Future()
+    def read_ready():
+        f.result = sock.recv(Buffer)
+        f._call()
+    selector.register(sock, EVENT_READ, read_ready)
+    chunk = yield from f
+    selector.unregister(sock)
+    return chunk
 
 class Crawler(object):
-	def __init__(self):
-		self.url = 'www.baidu.com'
-		self.sock = socket.socket()
-		self.sock.setblocking(False)
-		self.resp = b''
+    def __init__(self):
+        self.url = 'www.baidu.com'
+        self.sock = socket.socket()
+        self.sock.setblocking(False)
+        self.resp = b''
 
-	def fetch(self):
-		f = Future()
-		try:
-			self.sock.connect((self.url, 80))
-		except:
-			pass
-
-		def connected():
-			f.set_result(None)
-
-		selector.register(self.sock, EVENT_WRITE, connected)
-		yield from f
-		print('connected.')
-		
-		self.send_data()
-		selector.unregister(self.sock)
-		data = yield from self.recv_data()
-		self.resp = data
-		print(self.resp)
-		global stop, count
-		count -= 1
-		if count <= 0:
-			stop = True
-
-	def send_data(self):
-		get = 'GET / HTTP/1.1\r\nHost: www.baidu.com\r\n\r\n'.encode('ascii')
-		self.sock.send(get)
-
-	def recv_data(self):
-		f = Future()
-		
-		def read_ready():
-			data = b''
-			while True:
-				try:
-					data += self.sock.recv(4096)
-				except:
-					break
-			f.set_result(data)
-		selector.register(self.sock, EVENT_READ, read_ready)
-		chunk = yield from f
-		selector.unregister(self.sock)
-		return chunk
+    def fetch(self):
+        yield from connect(self.sock, (self.url, 80))
+        get = 'GET / HTTP/1.0\r\nHost:www.baidu.com\r\n\r\n'.encode('ascii')
+        send(self.sock, get)
+        data = yield from recv_data_all(self.sock, 4096)
+        self.resp = data
+        print(self.resp.decode('utf8'))
+        self.sock.close()
 
 class Task(object):
-	def __init__(self,coro):
-		self.coro = coro
-		f = Future()
-		f.set_result(None)
-		self.next_step(f)
+    def __init__(self, coro):
+        self.coro = coro
+        f =Future()
+        self.step(f)
 
-	def next_step(self,future):
-		try:
-			next_future = self.coro.send(future.result)
-		except StopIteration:
-			return
-		next_future.add_callback(self.next_step)
+    def step(self, future):
+        try:
+            next_future = self.coro.send(future.result)
+        except StopIteration:
+            global count_tasks
+            count_tasks -= 1
+            return
+        next_future.set_callback(self.step)
 
-stop = False
+class Loop(object):
+    def __init__(self, tasks):
+        self.tasks = tasks
+        self.count_tasks = len(tasks)
+
+    def main(self):
+        for task in self.tasks:
+            Task(task)
+
+    def run_until_complete(self):
+        for task in self.tasks:
+            Task(task)
+        global count_tasks
+        while count_tasks > 0:
+            events = selector.select()
+            for event_key, event_mask in events:
+                _callback = event_key.data
+                _callback()
+
 selector = DefaultSelector()
-count = 10
-
-for i in range(10):
-	Task(Crawler().fetch())
-while not stop:
-	events = selector.select()
-	for event_key , event_mask in events:
-		call = event_key.data
-		call()
+tasks = [Crawler().fetch() for i in range(2)]
+count_tasks = len(tasks)
+loop = Loop(tasks)
+loop.run_until_complete()
